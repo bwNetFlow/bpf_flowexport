@@ -145,13 +145,6 @@ func (f *FlowExporter) Start() {
 func (f *FlowExporter) Stop() {
 	log.Println("[info] FlowExporter: Stopping export goroutines.")
 	close(f.stop)
-
-	// export the remaining flows unconditionally
-	f.mutex.Lock()
-	for key, _ := range f.cache {
-		f.export(key)
-	}
-	f.mutex.Unlock()
 }
 
 func (f *FlowExporter) exportInactive() {
@@ -210,23 +203,20 @@ func (f *FlowExporter) Insert(pkt bpf.Packet) {
 	}
 	record.LastUpdated = time.Now()
 	record.Packets = append(record.Packets, pkt)
-	f.mutex.Unlock()
-
 	if pkt.TcpFlags&0b1 == 1 { // short cut flow export if we see TCP FIN
-		f.mutex.Lock()
 		f.export(key)
-		f.mutex.Unlock()
 	}
+	f.mutex.Unlock()
 }
 
 func (f *FlowExporter) ConsumeFrom(pkts chan bpf.Packet) {
 	for {
 		select {
 		case pkt, ok := <-pkts:
-			if !ok {
-				f.Stop() // stop will export regardless of timeouts
-			}
 			f.Insert(pkt)
+			if !ok {
+				return
+			}
 		case <-f.stop:
 			return
 		}
