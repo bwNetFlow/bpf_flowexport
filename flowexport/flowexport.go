@@ -81,9 +81,6 @@ func BuildFlow(f *FlowRecord) *flow.FlowMessage {
 		}
 
 		// plausibility checks TODO: remove/make less laughable, also check on OutIf...
-		if flow.Etype != pkt.Etype {
-			fmt.Println("wat Etype")
-		}
 		if flow.IPv6FlowLabel != pkt.Ipv6FlowLabel {
 			fmt.Println("wat Ipv6FlowLabel")
 		}
