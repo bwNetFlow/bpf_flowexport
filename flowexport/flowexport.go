@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwNetFlow/bpf_flowexport/bpf"
+	"github.com/bwNetFlow/bpf_flowexport/packetdump"
 	flow "github.com/bwNetFlow/protobuf/go"
 )
 
@@ -20,7 +20,7 @@ type FlowKey struct {
 	InIface uint32
 }
 
-func NewFlowKey(pkt bpf.Packet) FlowKey {
+func NewFlowKey(pkt packetdump.Packet) FlowKey {
 	return FlowKey{
 		SrcAddr: string(pkt.SrcAddr.To16()),
 		DstAddr: string(pkt.DstAddr.To16()),
@@ -35,7 +35,7 @@ func NewFlowKey(pkt bpf.Packet) FlowKey {
 type FlowRecord struct {
 	TimeReceived time.Time
 	LastUpdated  time.Time
-	Packets      []bpf.Packet
+	Packets      []packetdump.Packet
 }
 
 func BuildFlow(f *FlowRecord) *flow.FlowMessage {
@@ -156,7 +156,7 @@ func (f *FlowExporter) exportActive() {
 	}
 }
 
-func (f *FlowExporter) Insert(pkt bpf.Packet) {
+func (f *FlowExporter) Insert(pkt packetdump.Packet) {
 	key := NewFlowKey(pkt)
 
 	var record *FlowRecord
@@ -176,7 +176,7 @@ func (f *FlowExporter) Insert(pkt bpf.Packet) {
 	f.mutex.Unlock()
 }
 
-func (f *FlowExporter) ConsumeFrom(pkts chan bpf.Packet) {
+func (f *FlowExporter) ConsumeFrom(pkts chan packetdump.Packet) {
 	for {
 		select {
 		case pkt, ok := <-pkts:
