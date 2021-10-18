@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/bwNetFlow/bpf_flowexport/bpf"
 	"github.com/bwNetFlow/bpf_flowexport/flowexport"
+	"github.com/bwNetFlow/bpf_flowexport/packetdump"
 )
 
 func usage() {
@@ -21,7 +21,7 @@ func main() {
 	device := os.Args[1]
 
 	// setup bpf dumping
-	dumper := &bpf.PacketDumper{}
+	dumper := &packetdump.PacketDumper{}
 	err := dumper.Setup(device)
 	if err != nil {
 		fmt.Println(err)
