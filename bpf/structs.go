@@ -18,4 +18,6 @@ type Packet struct {
 	IcmpType      uint8
 	IcmpCode      uint8
 	TcpFlags      uint8
+	FlowDirection uint8
+	RemoteAddress uint8
 }
