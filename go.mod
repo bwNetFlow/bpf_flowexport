@@ -9,5 +9,7 @@ require (
 
 require (
 	github.com/bwNetFlow/protobuf/go v0.0.0-20211004083441-61e193b4b342 // indirect
+	github.com/cilium/ebpf v0.7.0 // indirect
+	golang.org/x/sys v0.0.0-20210906170528-6f6e22806c34 // indirect
 	google.golang.org/protobuf v1.27.1 // indirect
 )

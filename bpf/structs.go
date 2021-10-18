@@ -5,8 +5,8 @@ import "net"
 type Packet struct {
 	SrcAddr       net.IP
 	DstAddr       net.IP
-	IngressIface  uint32
-	CollectIface  uint32
+	InIf          uint32
+	OutIf         uint32
 	Bytes         uint32
 	Etype         uint32
 	Proto         uint32

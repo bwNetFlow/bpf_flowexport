@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/bwNetFlow/bpfdump"
+	"github.com/bwNetFlow/bpf_flowexport/bpf"
 )
 
 func usage() {
@@ -19,7 +19,7 @@ func main() {
 	}
 	device := os.Args[1]
 
-	dumper := &bpfdump.BpfPacketDumper{}
+	dumper := &bpf.PacketDumper{}
 
 	err := dumper.Setup(device)
 	if err != nil {
@@ -38,17 +38,17 @@ func main() {
 			if packet.Proto == 1 {
 				protoextra = fmt.Sprintf(" (%d|%d)", packet.IcmpType, packet.IcmpCode)
 			} else if packet.Proto == 6 {
-				protoextra = fmt.Sprintf(" (s:%d|a:%d|f:%d)", (packet.TcpFlags&0b10)>>1, (packet.TcpFlags&0b10000)>>4, packet.TcpFlags&0b1)
+				protoextra = fmt.Sprintf(" (s:%d|a:%d|r:%d|f:%d)", (packet.TcpFlags&0b10)>>1, (packet.TcpFlags&0b10000)>>4, (packet.TcpFlags&0b100)>>2, packet.TcpFlags&0b1)
 			}
 		} else {
 			if packet.Proto == 58 {
 				protoextra = fmt.Sprintf(" (%d|%d)", packet.IcmpType, packet.IcmpCode)
 			} else if packet.Proto == 6 {
-				protoextra = fmt.Sprintf(" (s:%d|a:%d|f:%d)", (packet.TcpFlags&0b10)>>1, (packet.TcpFlags&0b10000)>>4, packet.TcpFlags&0b1)
+				protoextra = fmt.Sprintf(" (s:%d|a:%d|r:%d|f:%d)", (packet.TcpFlags&0b10)>>1, (packet.TcpFlags&0b10000)>>4, (packet.TcpFlags&0b100)>>2, packet.TcpFlags&0b1)
 			}
 		}
 		var dir string
-		if packet.IngressIface == packet.CollectIface {
+		if packet.InIf == packet.OutIf {
 			dir = " in"
 		} else {
 			dir = "out"
