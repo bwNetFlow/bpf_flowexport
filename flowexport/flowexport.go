@@ -39,37 +39,37 @@ type FlowRecord struct {
 }
 
 func BuildFlow(f *FlowRecord) *flow.FlowMessage {
-	flow := &flow.FlowMessage{}
-	flow.TimeReceived = uint64(f.TimeReceived.Unix())
-	flow.TimeFlowStart = uint64(f.TimeReceived.Unix())
-	flow.TimeFlowEnd = uint64(f.LastUpdated.Unix())
+	msg := &flow.FlowMessage{}
+	msg.TimeReceived = uint64(f.TimeReceived.Unix())
+	msg.TimeFlowStart = uint64(f.TimeReceived.Unix())
+	msg.TimeFlowEnd = uint64(f.LastUpdated.Unix())
 	for i, pkt := range f.Packets {
 		if i == 0 {
 			// flow key 7-tuple
-			flow.SrcAddr = pkt.SrcAddr
-			flow.DstAddr = pkt.DstAddr
-			flow.SrcPort = uint32(pkt.SrcPort)
-			flow.DstPort = uint32(pkt.DstPort)
-			flow.Proto = pkt.Proto
-			flow.IPTos = uint32(pkt.IPTos)
-			flow.InIf = pkt.InIf
+			msg.SrcAddr = pkt.SrcAddr
+			msg.DstAddr = pkt.DstAddr
+			msg.SrcPort = uint32(pkt.SrcPort)
+			msg.DstPort = uint32(pkt.DstPort)
+			msg.Proto = pkt.Proto
+			msg.IPTos = uint32(pkt.IPTos)
+			msg.InIf = pkt.InIf
 
 			// other presumably static data, this will be set to the first packets fields
-			flow.OutIf = pkt.OutIf
-			flow.FlowDirection = pkt.FlowDirection // this is derived from the packets type
-			flow.RemoteAddr = pkt.RemoteAddr       // this is derived from the packets type
-			flow.Etype = pkt.Etype
-			flow.IPv6FlowLabel = pkt.Ipv6FlowLabel // TODO: no differences possible?
-			flow.IPTTL = uint32(pkt.IPTtl)         // TODO: set to lowest if differ?
-			flow.IcmpType = uint32(pkt.IcmpType)   // TODO: differences could occur between packets
-			flow.IcmpCode = uint32(pkt.IcmpCode)   // TODO: differences could occur between packets
+			msg.OutIf = pkt.OutIf
+			msg.FlowDirection = uint32(pkt.FlowDirection)                    // this is derived from the packets type
+			msg.RemoteAddr = flow.FlowMessage_RemoteAddrType(pkt.RemoteAddr) // this is derived from the packets type
+			msg.Etype = pkt.Etype
+			msg.IPv6FlowLabel = pkt.Ipv6FlowLabel // TODO: no differences possible?
+			msg.IPTTL = uint32(pkt.IPTtl)         // TODO: set to lowest if differ?
+			msg.IcmpType = uint32(pkt.IcmpType)   // TODO: differences could occur between packets
+			msg.IcmpCode = uint32(pkt.IcmpCode)   // TODO: differences could occur between packets
 		}
 		// special handling
-		flow.TCPFlags = flow.TCPFlags | uint32(pkt.TcpFlags)
-		flow.Bytes += uint64(pkt.Bytes)
-		flow.Packets += 1
+		msg.TCPFlags = msg.TCPFlags | uint32(pkt.TcpFlags)
+		msg.Bytes += uint64(pkt.Bytes)
+		msg.Packets += 1
 	}
-	return flow
+	return msg
 }
 
 type FlowExporter struct {
