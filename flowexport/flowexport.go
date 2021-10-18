@@ -28,7 +28,7 @@ func NewFlowKey(pkt packetdump.Packet) FlowKey {
 		DstPort: pkt.DstPort,
 		Proto:   pkt.Proto,
 		IPTos:   pkt.IPTos,
-		InIface: pkt.IngressIface,
+		InIface: pkt.InIf,
 	}
 }
 
