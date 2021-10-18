@@ -52,48 +52,18 @@ func BuildFlow(f *FlowRecord) *flow.FlowMessage {
 			flow.DstPort = uint32(pkt.DstPort)
 			flow.Proto = pkt.Proto
 			flow.IPTos = uint32(pkt.IPTos)
-			flow.InIf = pkt.IngressIface
+			flow.InIf = pkt.InIf
 
-			// other presumably static data
+			// other presumably static data, this will be set to the first packets fields
+			flow.OutIf = pkt.OutIf
+			flow.FlowDirection = pkt.FlowDirection // this is derived from the packets type
+			flow.RemoteAddr = pkt.RemoteAddr       // this is derived from the packets type
 			flow.Etype = pkt.Etype
-			flow.IPv6FlowLabel = pkt.Ipv6FlowLabel
-			flow.IPTTL = uint32(pkt.IPTtl)
-			flow.IcmpType = uint32(pkt.IcmpType)
-			flow.IcmpCode = uint32(pkt.IcmpCode)
-
-			// additional assumptions TODO: aaaaargh
-			// TODO: whats up with bridge ifaces
-			flow.OutIf = pkt.CollectIface // TODO: think about this...
-			if pkt.IngressIface == 0 {
-				// if ingress iface is 0, the flow is locally originated
-				flow.FlowDirection = 0 // egress flow marker
-				flow.RemoteAddr = 2    // dst addr is remote
-			} else if pkt.IngressIface == pkt.CollectIface {
-				// if ingress iface is the same that we collected on, the flow is ingress into this host
-				flow.OutIf = 0         // in that case, OutIf != InIf... TODO: what about loops?
-				flow.FlowDirection = 1 // ingress flow marker
-				flow.RemoteAddr = 1    // src addr is remote
-			} else if pkt.IngressIface != pkt.CollectIface {
-				// if ingress iface and collect iface differ, the flow is being forwarded through the collect iface
-				flow.FlowDirection = 0 // egress flow marker
-				flow.RemoteAddr = 0    // both are remote
-			}
+			flow.IPv6FlowLabel = pkt.Ipv6FlowLabel // TODO: no differences possible?
+			flow.IPTTL = uint32(pkt.IPTtl)         // TODO: set to lowest if differ?
+			flow.IcmpType = uint32(pkt.IcmpType)   // TODO: differences could occur between packets
+			flow.IcmpCode = uint32(pkt.IcmpCode)   // TODO: differences could occur between packets
 		}
-
-		// plausibility checks TODO: remove/make less laughable, also check on OutIf...
-		if flow.IPv6FlowLabel != pkt.Ipv6FlowLabel {
-			fmt.Println("wat Ipv6FlowLabel")
-		}
-		if flow.IPTTL != uint32(pkt.IPTtl) {
-			fmt.Println("wat IPTTL")
-		}
-		if flow.IcmpType != uint32(pkt.IcmpType) {
-			fmt.Println("wat IcmpType")
-		}
-		if flow.IcmpCode != uint32(pkt.IcmpCode) {
-			fmt.Println("wat IcmpCode")
-		}
-
 		// special handling
 		flow.TCPFlags = flow.TCPFlags | uint32(pkt.TcpFlags)
 		flow.Bytes += uint64(pkt.Bytes)

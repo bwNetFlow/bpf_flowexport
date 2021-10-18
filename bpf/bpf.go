@@ -39,6 +39,8 @@ type rawPacket struct {
 	IcmpType      uint8
 	IcmpCode      uint8
 	TcpFlags      uint8
+	FlowDirection uint8
+	RemoteAddr    uint8
 }
 
 func parseRawPacket(rawPacket rawPacket) Packet {
@@ -71,6 +73,8 @@ func parseRawPacket(rawPacket rawPacket) Packet {
 		IcmpType:      rawPacket.IcmpType,
 		IcmpCode:      rawPacket.IcmpCode,
 		TcpFlags:      rawPacket.TcpFlags,
+		FlowDirection: rawPacket.FlowDirection,
+		RemoteAddr:    rawPacket.RemoteAddr,
 	}
 }
 

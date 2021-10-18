@@ -89,9 +89,11 @@ typedef struct {
     __u16 dstport; // L4
     __u8 ipttl; // L3
     __u8 tos; // L3
-    __u8 icmp_type; // L4 TODO
-    __u8 icmp_code; // L4 TODO
+    __u8 icmp_type; // L4
+    __u8 icmp_code; // L4
     __u8 tcp_flags; // L4
+    __u8 direction; // L1
+    __u8 remoteaddr; // L1
 } packet_t;
 
 struct {
@@ -104,17 +106,16 @@ int packet_dump(struct __sk_buff *skb) {
     packet_t pkt = {};
 
     // L1
-    // TODO: fix below if
+    //
+    pkt.inif = skb->ingress_ifindex;
     if (skb->pkt_type == PACKET_HOST) { // to us
-        // pkt.direction = 0
-        // pkt.remoteaddr = src
-        pkt.inif = skb->ingress_ifindex; // should be equal to ifindex
-        pkt.outif = 0;
+        pkt.direction = 0 // ingress
+        pkt.remoteaddr = 1 // remote address is srcaddr
+        pkt.outif = 0; // we don't have any info without our fib
     } else if (skb->pkt_type == PACKET_OUTGOING) { // from us
-        // pkt.direction = 1
-        // pkt.remoteaddr = dst
-        pkt.inif = skb->ingress_ifindex;
-        pkt.outif = skb->ifindex;
+        pkt.direction = 1 // egress
+        pkt.remoteaddr = 2 // remote address is dstaddr
+        pkt.outif = skb->ifindex; // since it's egress, we're the outif
     }
 
     // L2
