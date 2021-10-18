@@ -1,4 +1,4 @@
-package bpf
+package packetdump
 
 import "net"
 
@@ -19,5 +19,5 @@ type Packet struct {
 	IcmpCode      uint8
 	TcpFlags      uint8
 	FlowDirection uint8
-	RemoteAddress uint8
+	RemoteAddr    uint8
 }

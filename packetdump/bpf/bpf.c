@@ -109,12 +109,12 @@ int packet_dump(struct __sk_buff *skb) {
     //
     pkt.inif = skb->ingress_ifindex;
     if (skb->pkt_type == PACKET_HOST) { // to us
-        pkt.direction = 0 // ingress
-        pkt.remoteaddr = 1 // remote address is srcaddr
+        pkt.direction = 0; // ingress
+        pkt.remoteaddr = 1; // remote address is srcaddr
         pkt.outif = 0; // we don't have any info without our fib
     } else if (skb->pkt_type == PACKET_OUTGOING) { // from us
-        pkt.direction = 1 // egress
-        pkt.remoteaddr = 2 // remote address is dstaddr
+        pkt.direction = 1; // egress
+        pkt.remoteaddr = 2; // remote address is dstaddr
         pkt.outif = skb->ifindex; // since it's egress, we're the outif
     }
 
