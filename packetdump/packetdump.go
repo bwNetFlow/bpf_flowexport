@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"github.com/cilium/ebpf/perf"
+	"github.com/cilium/ebpf/rlimit"
 )
 
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
@@ -124,6 +125,11 @@ func (b *PacketDumper) Packets() chan Packet {
 }
 
 func (b *PacketDumper) Setup(device string) error {
+	// allow the current process to lock memory for eBPF resources
+	if err := rlimit.RemoveMemlock(); err != nil {
+		log.Fatal(err)
+	}
+
 	b.objs = bpfObjects{} // load pre-compiled programs and maps into the kernel
 	if err := loadBpfObjects(&b.objs, nil); err != nil {
 		log.Fatalf("loading objects: %v", err)
