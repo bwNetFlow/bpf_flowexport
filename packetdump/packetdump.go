@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os"
 	"syscall"
 
 	"github.com/cilium/ebpf/perf"
@@ -79,6 +78,8 @@ func parseRawPacket(rawPacket rawPacket) Packet {
 }
 
 type PacketDumper struct {
+	BufSize int // Determines kernel perf map allocation. It is rounded up to the nearest multiple of the current page size.
+
 	packets chan Packet // exported through .Packets()
 
 	// setup
@@ -109,7 +110,7 @@ func (b *PacketDumper) Packets() chan Packet {
 			}
 
 			if record.LostSamples != 0 {
-				log.Printf("[warning] BPF packet dump: Kernel perf event buffer full, dropped %d samples", record.LostSamples)
+				log.Printf("[warning] BPF packet dump: Dropped %d samples from kernel perf buffer, consider increasing BufSize (currently %d bytes)", record.LostSamples, b.BufSize)
 				continue
 			}
 
@@ -162,7 +163,17 @@ func (b *PacketDumper) Start() error {
 		return fmt.Errorf("Unable to attach BPF socket filter: %v", err)
 	}
 
-	b.perfReader, err = perf.NewReader(b.objs.Packets, os.Getpagesize())
+	if b.BufSize == 0 {
+		// Set to a reasonably conservative value thats safe for
+		// client-side pps levels.
+		// Cilium docs set this to os.Getpagesize, which will return
+		// 4096 bytes on any resonably modern platform. This however
+		// leads to dropped samples in high load situations for dev
+		// machines and containers, so the default is to increase that
+		// by a factor of 2.
+		b.BufSize = 2 * 4096
+	}
+	b.perfReader, err = perf.NewReader(b.objs.Packets, b.BufSize)
 	if err != nil {
 		return fmt.Errorf("Unable to connect kernel perf event reader: %s", err)
 	}
