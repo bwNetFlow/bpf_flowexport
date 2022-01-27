@@ -4,7 +4,7 @@ go 1.17
 
 require (
 	github.com/bwNetFlow/protobuf/go v0.0.0-20211004083441-61e193b4b342
-	github.com/cilium/ebpf v0.7.0
+	github.com/cilium/ebpf v0.8.0
 	github.com/prometheus/client_golang v1.12.0
 )
 
