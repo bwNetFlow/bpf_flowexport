@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/bwNetFlow/bpf_flowexport/packetdump"
-	flow "github.com/bwNetFlow/protobuf/go"
+	"github.com/bwNetFlow/flowpipeline/pb"
 )
 
 type FlowKey struct {
@@ -38,8 +38,8 @@ type FlowRecord struct {
 	Packets      []packetdump.Packet
 }
 
-func BuildFlow(f *FlowRecord) *flow.FlowMessage {
-	msg := &flow.FlowMessage{}
+func BuildFlow(f *FlowRecord) *pb.EnrichedFlow {
+	msg := &pb.EnrichedFlow{}
 	msg.TimeReceived = uint64(f.TimeReceived.Unix())
 	msg.TimeFlowStart = uint64(f.TimeReceived.Unix())
 	msg.TimeFlowEnd = uint64(f.LastUpdated.Unix())
@@ -56,8 +56,8 @@ func BuildFlow(f *FlowRecord) *flow.FlowMessage {
 
 			// other presumably static data, this will be set to the first packets fields
 			msg.OutIf = pkt.OutIf
-			msg.FlowDirection = uint32(pkt.FlowDirection)                    // this is derived from the packets type
-			msg.RemoteAddr = flow.FlowMessage_RemoteAddrType(pkt.RemoteAddr) // this is derived from the packets type
+			msg.FlowDirection = uint32(pkt.FlowDirection)                   // this is derived from the packets type
+			msg.RemoteAddr = pb.EnrichedFlow_RemoteAddrType(pkt.RemoteAddr) // this is derived from the packets type
 			msg.Etype = pkt.Etype
 			msg.IPv6FlowLabel = pkt.Ipv6FlowLabel // TODO: no differences possible?
 			msg.IPTTL = uint32(pkt.IPTtl)         // TODO: set to lowest if differ?
@@ -76,7 +76,7 @@ type FlowExporter struct {
 	activeTimeout   time.Duration
 	inactiveTimeout time.Duration
 
-	Flows chan *flow.FlowMessage
+	Flows chan *pb.EnrichedFlow
 
 	mutex *sync.RWMutex
 	stop  chan bool
@@ -94,7 +94,7 @@ func NewFlowExporter(activeTimeout string, inactiveTimeout string) (*FlowExporte
 	}
 
 	fe := &FlowExporter{activeTimeout: activeTimeoutDuration, inactiveTimeout: inactiveTimeoutDuration}
-	fe.Flows = make(chan *flow.FlowMessage)
+	fe.Flows = make(chan *pb.EnrichedFlow)
 
 	fe.mutex = &sync.RWMutex{}
 	fe.cache = make(map[FlowKey]*FlowRecord)
