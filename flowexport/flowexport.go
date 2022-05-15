@@ -3,6 +3,7 @@ package flowexport
 import (
 	"fmt"
 	"log"
+	"net"
 	"sync"
 	"time"
 
@@ -33,13 +34,16 @@ func NewFlowKey(pkt packetdump.Packet) FlowKey {
 }
 
 type FlowRecord struct {
-	TimeReceived time.Time
-	LastUpdated  time.Time
-	Packets      []packetdump.Packet
+	TimeReceived   time.Time
+	LastUpdated    time.Time
+	SamplerAddress net.IP
+	Packets        []packetdump.Packet
 }
 
 func BuildFlow(f *FlowRecord) *pb.EnrichedFlow {
 	msg := &pb.EnrichedFlow{}
+	msg.Type = pb.EnrichedFlow_EBPF
+	msg.SamplerAddress = f.SamplerAddress
 	msg.TimeReceived = uint64(f.TimeReceived.Unix())
 	msg.TimeFlowStart = uint64(f.TimeReceived.Unix())
 	msg.TimeFlowEnd = uint64(f.LastUpdated.Unix())
@@ -75,6 +79,7 @@ func BuildFlow(f *FlowRecord) *pb.EnrichedFlow {
 type FlowExporter struct {
 	activeTimeout   time.Duration
 	inactiveTimeout time.Duration
+	samplerAddress  net.IP
 
 	Flows chan *pb.EnrichedFlow
 
@@ -102,8 +107,10 @@ func NewFlowExporter(activeTimeout string, inactiveTimeout string) (*FlowExporte
 	return fe, nil
 }
 
-func (f *FlowExporter) Start() {
+func (f *FlowExporter) Start(samplerAddress net.IP) {
 	log.Println("[info] FlowExporter: Starting export goroutines.")
+
+	f.samplerAddress = samplerAddress
 	f.stop = make(chan bool)
 	go f.exportInactive()
 	go f.exportActive()
@@ -169,6 +176,7 @@ func (f *FlowExporter) Insert(pkt packetdump.Packet) {
 		record = f.cache[key]
 	}
 	record.LastUpdated = time.Now()
+	record.SamplerAddress = f.samplerAddress
 	record.Packets = append(record.Packets, pkt)
 	if pkt.TcpFlags&0b1 == 1 { // short cut flow export if we see TCP FIN
 		f.export(key)

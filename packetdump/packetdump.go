@@ -86,6 +86,7 @@ type PacketDumper struct {
 	objs           bpfObjects
 	socketFilterFd int
 	iface          *net.Interface
+	SamplerAddress net.IP
 
 	// start
 	socketFd   int
@@ -139,6 +140,15 @@ func (b *PacketDumper) Setup(device string) error {
 	var err error
 	if b.iface, err = net.InterfaceByName(device); err != nil {
 		return fmt.Errorf("Unable to get interface, err: %v", err)
+	}
+
+	var addrs []net.Addr
+	addrs, err = b.iface.Addrs()
+	for _, a := range addrs {
+		if ipnet, ok := a.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			b.SamplerAddress = ipnet.IP
+			break
+		}
 	}
 
 	return nil
