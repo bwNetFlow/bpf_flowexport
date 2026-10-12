@@ -22,13 +22,14 @@ func main() {
 
 	// setup bpf dumping
 	dumper := &packetdump.PacketDumper{}
-	err := dumper.Setup(device)
-	if err != nil {
+	if err := dumper.Setup(device); err != nil {
 		fmt.Println(err)
+		os.Exit(1)
 	}
-	err = dumper.Start()
-	if err != nil {
+	if err := dumper.Start(); err != nil {
 		fmt.Println(err)
+		dumper.Stop()
+		os.Exit(1)
 	}
 	defer dumper.Stop()
 
@@ -36,6 +37,7 @@ func main() {
 	fmap, err := flowexport.NewFlowExporter("30m", "15s")
 	if err != nil {
 		fmt.Println(err)
+		os.Exit(1)
 	}
 	fmap.Start(dumper.SamplerAddress)
 	defer fmap.Stop()

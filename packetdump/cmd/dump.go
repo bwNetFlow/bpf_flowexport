@@ -21,13 +21,14 @@ func main() {
 
 	dumper := &packetdump.PacketDumper{}
 
-	err := dumper.Setup(device)
-	if err != nil {
+	if err := dumper.Setup(device); err != nil {
 		fmt.Println(err)
+		os.Exit(1)
 	}
-	err = dumper.Start()
-	if err != nil {
+	if err := dumper.Start(); err != nil {
 		fmt.Println(err)
+		dumper.Stop()
+		os.Exit(1)
 	}
 	defer dumper.Stop()
 
@@ -47,10 +48,8 @@ func main() {
 				protoextra = fmt.Sprintf(" (s:%d|a:%d|r:%d|f:%d)", (packet.TcpFlags&0b10)>>1, (packet.TcpFlags&0b10000)>>4, (packet.TcpFlags&0b100)>>2, packet.TcpFlags&0b1)
 			}
 		}
-		var dir string
-		if packet.InIf == packet.OutIf {
-			dir = " in"
-		} else {
+		dir := " in"
+		if packet.FlowDirection == 1 {
 			dir = "out"
 		}
 		fmt.Printf("%s: bytes %d, etype %x, proto %d%s, ttl %d, tos %b, %s:%d -> %s:%d\n", dir, packet.Bytes, packet.Etype, packet.Proto, protoextra, packet.IPTtl, packet.IPTos, packet.SrcAddr, packet.SrcPort, packet.DstAddr, packet.DstPort)
