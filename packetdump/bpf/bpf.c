@@ -1,9 +1,8 @@
 #include <linux/types.h> // __u* types
 
-#include <arpa/inet.h> // *_t types
 #include <linux/bpf.h> // BPF constants
 #include <bpf/bpf_helpers.h> // SEC macro
-// or from headers dir: #include "bpf_helpers.h"
+#include <bpf/bpf_endian.h> // bpf_ntoh*
 
 #include <linux/if_packet.h> // PACKET_*
 #include <linux/if_ether.h> // ETH_*
@@ -21,62 +20,62 @@
 
 #pragma pack(push, 1)
 typedef struct {
-  uint8_t  dstaddr[6];
-  uint8_t  srcaddr[6];
-  uint16_t llc_len;
+  __u8  dstaddr[6];
+  __u8  srcaddr[6];
+  __u16 llc_len;
 } ether_header_t;
 
 typedef struct {
-  uint8_t  ver_ihl;
-  uint8_t  tos;
-  uint16_t total_length;
-  uint16_t id;
-  uint16_t flags_fo;
-  uint8_t  ttl;
-  uint8_t  protocol;
-  uint16_t checksum;
-  uint32_t srcaddr;
-  uint32_t dstaddr;
+  __u8  ver_ihl;
+  __u8  tos;
+  __u16 total_length;
+  __u16 id;
+  __u16 flags_fo;
+  __u8  ttl;
+  __u8  protocol;
+  __u16 checksum;
+  __u32 srcaddr;
+  __u32 dstaddr;
 } ip4_header_t;
 
 typedef struct {
-  uint32_t ver_tc_fl;
-  uint16_t payload_length;
-  uint8_t next_header;
-  uint8_t hop_limit;
-  unsigned long long src_hi;
-  unsigned long long src_lo;
-  unsigned long long dst_hi;
-  unsigned long long dst_lo;
+  __u32 ver_tc_fl;
+  __u16 payload_length;
+  __u8  next_header;
+  __u8  hop_limit;
+  __u64 src_hi;
+  __u64 src_lo;
+  __u64 dst_hi;
+  __u64 dst_lo;
 } ip6_header_t;
 
 typedef struct {
-  uint16_t srcport;
-  uint16_t dstport;
-  uint32_t seq;
-  uint32_t ack;
-  uint8_t  data_offset; // and 4 extra bits
-  uint8_t  flags;
+  __u16 srcport;
+  __u16 dstport;
+  __u32 seq;
+  __u32 ack;
+  __u8  data_offset; // and 4 extra bits
+  __u8  flags;
   // remainder does not matter
 } tcp_header_t;
 
 typedef struct {
-  uint16_t srcport;
-  uint16_t dstport;
+  __u16 srcport;
+  __u16 dstport;
   // remainder does not matter
 } udp_header_t;
 
 typedef struct {
-  uint8_t type;
-  uint8_t code;
+  __u8 type;
+  __u8 code;
 } icmp_header_t;
 #pragma pack(pop)
 
 typedef struct {
-    unsigned long long  src_hi; // L3
-    unsigned long long  src_lo; // L3
-    unsigned long long  dst_hi; // L3
-    unsigned long long  dst_lo; // L3
+    __u64 src_hi; // L3
+    __u64 src_lo; // L3
+    __u64 dst_hi; // L3
+    __u64 dst_lo; // L3
     __u32 inif; // L1
     __u32 outif; // L1
     __u32 bytes; // len(L2 payload)
@@ -96,11 +95,14 @@ typedef struct {
     __u8 remoteaddr; // L1
 } packet_t;
 
+// Locals don't end up in BTF; bpf2go -type packet_t needs the type referenced from a global.
+const packet_t *unused_packet_t __attribute__((unused));
+
 struct {
 	__uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
 } packets SEC(".maps");
 
-SEC("socket1")
+SEC("socket")
 int packet_dump(struct __sk_buff *skb) {
 
     packet_t pkt = {};
@@ -119,7 +121,7 @@ int packet_dump(struct __sk_buff *skb) {
     }
 
     // L2
-    pkt.etype = htons(skb->protocol);
+    pkt.etype = bpf_ntohs(skb->protocol);
 
     // L3
     short IHL = 40; // v6 header len, v4 will overwrite
@@ -129,25 +131,25 @@ int packet_dump(struct __sk_buff *skb) {
 
         IHL = 4 * (ip_header.ver_ihl & 0x0f);
 
-        pkt.bytes = ntohs(ip_header.total_length);
+        pkt.bytes = bpf_ntohs(ip_header.total_length);
         pkt.proto = ip_header.protocol;
         pkt.tos = ip_header.tos;
         pkt.ipttl = ip_header.ttl;
-        pkt.srcaddr = ntohl(ip_header.srcaddr);
-        pkt.dstaddr = ntohl(ip_header.dstaddr);
+        pkt.srcaddr = bpf_ntohl(ip_header.srcaddr);
+        pkt.dstaddr = bpf_ntohl(ip_header.dstaddr);
     } else if (pkt.etype == ETH_P_IPV6) {
         ip6_header_t ip_header;
         bpf_skb_load_bytes(skb, ETH_HLEN, &ip_header, 40);
 
-        pkt.bytes = ntohs(ip_header.payload_length);
+        pkt.bytes = bpf_ntohs(ip_header.payload_length);
         pkt.proto = ip_header.next_header;
-        pkt.tos = (ntohs(ip_header.ver_tc_fl) & 0x0ff00000)>>20;
+        pkt.tos = (bpf_ntohs(ip_header.ver_tc_fl) & 0x0ff00000)>>20;
         pkt.ipttl = ip_header.hop_limit;
-        pkt.ipv6_flowlabel = ntohs(ip_header.ver_tc_fl) & 0x000fffff;
-        pkt.src_hi = be64toh(ip_header.src_hi);
-        pkt.src_lo = be64toh(ip_header.src_lo);
-        pkt.dst_hi = be64toh(ip_header.dst_hi);
-        pkt.dst_lo = be64toh(ip_header.dst_lo);
+        pkt.ipv6_flowlabel = bpf_ntohs(ip_header.ver_tc_fl) & 0x000fffff;
+        pkt.src_hi = bpf_be64_to_cpu(ip_header.src_hi);
+        pkt.src_lo = bpf_be64_to_cpu(ip_header.src_lo);
+        pkt.dst_hi = bpf_be64_to_cpu(ip_header.dst_hi);
+        pkt.dst_lo = bpf_be64_to_cpu(ip_header.dst_lo);
     } else {
         return -1;
     }
@@ -157,15 +159,15 @@ int packet_dump(struct __sk_buff *skb) {
         tcp_header_t tcp_header;
         bpf_skb_load_bytes(skb, ETH_HLEN + IHL, &tcp_header, 14);
 
-        pkt.srcport = ntohs(tcp_header.srcport);
-        pkt.dstport = ntohs(tcp_header.dstport);
+        pkt.srcport = bpf_ntohs(tcp_header.srcport);
+        pkt.dstport = bpf_ntohs(tcp_header.dstport);
         pkt.tcp_flags = tcp_header.flags;
     } else if (pkt.proto == IPPROTO_UDP) {
         udp_header_t udp_header;
         bpf_skb_load_bytes(skb, ETH_HLEN + IHL, &udp_header, 4);
 
-        pkt.srcport = ntohs(udp_header.srcport);
-        pkt.dstport = ntohs(udp_header.dstport);
+        pkt.srcport = bpf_ntohs(udp_header.srcport);
+        pkt.dstport = bpf_ntohs(udp_header.dstport);
     } else if (pkt.proto == IPPROTO_ICMP || pkt.proto == IPPROTO_ICMPV6) {
         icmp_header_t icmp_header;
         bpf_skb_load_bytes(skb, ETH_HLEN + IHL, &icmp_header, 2);
