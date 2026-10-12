@@ -18,9 +18,9 @@ jobs:
           # clang -target bpf does not search the multiarch include dir, so linux/types.h can't find asm/types.h.
           ln -sf "/usr/include/$(uname -m)-linux-gnu/asm" /usr/include/asm
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
@@ -48,9 +48,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
