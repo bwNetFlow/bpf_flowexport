@@ -165,9 +165,15 @@ func (dumper *PacketDumper) Start() error {
 		return errors.New("Start ran without init")
 	}
 
-	fd, err := unix.Socket(unix.AF_PACKET, unix.SOCK_RAW, int(htons(unix.ETH_P_ALL)))
+	// Using Protocol 0 to receives nothing until the filter is attached.
+	fd, err := unix.Socket(unix.AF_PACKET, unix.SOCK_RAW, 0)
 	if err != nil {
 		return fmt.Errorf("Unable to open raw socket, err: %w", err)
+	}
+
+	if err := unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_ATTACH_BPF, dumper.objs.PacketDump.FD()); err != nil {
+		unix.Close(fd)
+		return fmt.Errorf("Unable to attach BPF socket filter, err: %w", err)
 	}
 
 	sll := unix.SockaddrLinklayer{
@@ -177,11 +183,6 @@ func (dumper *PacketDumper) Start() error {
 	if err := unix.Bind(fd, &sll); err != nil {
 		unix.Close(fd)
 		return fmt.Errorf("Unable to bind interface to raw socket, err: %w", err)
-	}
-
-	if err := unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_ATTACH_BPF, dumper.objs.PacketDump.FD()); err != nil {
-		unix.Close(fd)
-		return fmt.Errorf("Unable to attach BPF socket filter, err: %w", err)
 	}
 
 	if dumper.BufSize == 0 {
