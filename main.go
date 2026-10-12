@@ -37,7 +37,7 @@ func main() {
 	if err != nil {
 		fmt.Println(err)
 	}
-	fmap.Start()
+	fmap.Start(dumper.SamplerAddress)
 	defer fmap.Stop()
 
 	go fmap.ConsumeFrom(dumper.Packets())
