@@ -106,8 +106,8 @@ func TestDecodePacket(t *testing.T) {
 				u32(offsetBytes, 1500).
 				u32(offsetEtype, 0x0800).
 				u32(offsetProto, 6).
-				u32(offsetSrcaddr, 0xc0000201).
-				u32(offsetDstaddr, 0xc6336401).
+				u32(offsetSrcaddr, 0x0a0a0a01).
+				u32(offsetDstaddr, 0x0a0a0a02).
 				u16(offsetSrcport, 443).
 				u16(offsetDstport, 51234).
 				u8(offsetIpttl, 57).
