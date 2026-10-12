@@ -26,17 +26,70 @@ by using kernel counters such as:
 However, the current version just exports packet and byte counts by etype and
 protocol number.
 
+## Requirements
+
+* Linux 4.18 or newer
+
 ## Capabilities
 
-* `cap_sys_resource` is required to release the rlimit memlock which is
-  necessary to be able to load BPF programs
-* `cap_net_raw` is required to open raw sockets, to which our BPF program needs
-  to attach
-* `cap_perfmon` is required to create a kernel perf buffer for exporting packet
-  data into user space
+Requires root, or the following capabilities:
 
-Full example:
+| Kernel      | Capabilities                                          |
+|-------------|-------------------------------------------------------|
+| 5.11 or newer | `cap_bpf`, `cap_perfmon`, `cap_net_raw`              |
+| 5.8 - 5.11 | `cap_bpf`, `cap_perfmon`, `cap_net_raw`, `cap_sys_resource` |
+| older       | `cap_sys_admin`, `cap_net_raw`                        |
+
+* `cap_bpf` loads the BPF program and creates its maps.
+* `cap_perfmon` opens the perf buffer that carries packet headers to user space.
+* `cap_net_raw` opens the raw socket the program attaches to.
+
+Example:
 
 ```bash
-sudo setcap cap_sys_resource,cap_net_raw,cap_perfmon+ep binary
+sudo setcap cap_bpf,cap_perfmon,cap_net_raw+ep binary
+```
+
+### Debian and Ubuntu: `perf_event_paranoid`
+
+Debian and Ubuntu kernels have `kernel.perf_event_paranoid` levels at which `cap_perfmon` is
+not allowed to open the perf buffer. This leades to the error:
+
+```
+Unable to connect kernel perf event reader, err: failed to create perf ring for CPU 0: can't create perf event: permission denied
+```
+
+Check the level with `sysctl kernel.perf_event_paranoid`. If it is 3 or
+higher, either lower it to 2 using:
+
+```bash
+# temporarily
+sudo sysctl kernel.perf_event_paranoid=2
+# or persist across reboots
+echo 'kernel.perf_event_paranoid = 2' | sudo tee /etc/sysctl.d/60-perf-event-paranoid.conf
+```
+
+or grant `cap_sys_admin` instead of `cap_perfmon`, or run as root.
+
+## Building
+
+The compiled BPF objects (`packetdump/bpf_bpf{el,eb}.{go,o}`) are committed, so
+a plain `go build ./...` needs only Go. Changing `packetdump/bpf/bpf.c` also requires
+`clang`, `llvm` and `libbpf`. These can be installed using:
+
+```bash
+sudo apt install clang llvm libbpf-dev
+```
+
+## Testing
+
+```bash
+go test -race ./...
+```
+
+The end-to-end test injects packets on `lo` and checks every decoded field and can be executed using:
+
+```bash
+go test -c -race -o packetdump.test ./packetdump
+sudo ./packetdump.test -test.run TestEndToEndLoopback -test.v
 ```
