@@ -4,103 +4,113 @@
 package packetdump
 
 import (
-	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"log"
 	"net"
-	"syscall"
+	"os"
 
 	"github.com/cilium/ebpf/perf"
 	"github.com/cilium/ebpf/rlimit"
+	"golang.org/x/sys/unix"
 )
 
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang -cflags "-O2 -g -Wall -Werror" -type packet_t -tags linux bpf ./bpf/bpf.c
-type rawPacket struct {
-	SrcAddrHi     uint64
-	SrcAddrLo     uint64
-	DstAddrHi     uint64
-	DstAddrLo     uint64
-	InIf          uint32
-	OutIf         uint32
-	Bytes         uint32
-	Etype         uint32
-	Proto         uint32
-	Ipv6FlowLabel uint32
-	SrcAddr       uint32
-	DstAddr       uint32
-	SrcPort       uint16
-	DstPort       uint16
-	IPTtl         uint8
-	IPTos         uint8
-	IcmpType      uint8
-	IcmpCode      uint8
-	TcpFlags      uint8
-	FlowDirection uint8
-	RemoteAddr    uint8
+
+func htons(value uint16) uint16 {
+	var buf [2]byte
+	binary.BigEndian.PutUint16(buf[:], value)
+	return binary.NativeEndian.Uint16(buf[:])
 }
 
-func parseRawPacket(rawPacket rawPacket) Packet {
+func decodePacket(sample []byte) (Packet, error) {
+	var raw bpfPacketT
+	if _, err := binary.Decode(sample, binary.NativeEndian, &raw); err != nil {
+		return Packet{}, err
+	}
+
 	var srcip, dstip net.IP
-	if rawPacket.Etype == 0x0800 {
-		srcip = make(net.IP, 4)
-		binary.BigEndian.PutUint32(srcip, rawPacket.SrcAddr)
-		dstip = make(net.IP, 4)
-		binary.BigEndian.PutUint32(dstip, rawPacket.DstAddr)
-	} else if rawPacket.Etype == 0x86dd {
-		srcip = make(net.IP, 16)
-		binary.BigEndian.PutUint64(srcip, rawPacket.SrcAddrHi)
-		binary.BigEndian.PutUint64(srcip[8:], rawPacket.SrcAddrLo)
-		dstip = make(net.IP, 16)
-		binary.BigEndian.PutUint64(dstip, rawPacket.DstAddrHi)
-		binary.BigEndian.PutUint64(dstip[8:], rawPacket.DstAddrLo)
+	switch raw.Etype {
+	case unix.ETH_P_IP:
+		srcip = make(net.IP, net.IPv4len)
+		binary.BigEndian.PutUint32(srcip, raw.Srcaddr)
+		dstip = make(net.IP, net.IPv4len)
+		binary.BigEndian.PutUint32(dstip, raw.Dstaddr)
+	case unix.ETH_P_IPV6:
+		srcip = make(net.IP, net.IPv6len)
+		binary.BigEndian.PutUint64(srcip, raw.SrcHi)
+		binary.BigEndian.PutUint64(srcip[8:], raw.SrcLo)
+		dstip = make(net.IP, net.IPv6len)
+		binary.BigEndian.PutUint64(dstip, raw.DstHi)
+		binary.BigEndian.PutUint64(dstip[8:], raw.DstLo)
 	}
-	return Packet{SrcAddr: srcip,
+	return Packet{
+		SrcAddr:       srcip,
 		DstAddr:       dstip,
-		InIf:          rawPacket.InIf,
-		OutIf:         rawPacket.OutIf,
-		Bytes:         rawPacket.Bytes,
-		Etype:         rawPacket.Etype,
-		Proto:         rawPacket.Proto,
-		Ipv6FlowLabel: rawPacket.Ipv6FlowLabel,
-		SrcPort:       rawPacket.SrcPort,
-		DstPort:       rawPacket.DstPort,
-		IPTtl:         rawPacket.IPTtl,
-		IPTos:         rawPacket.IPTos,
-		IcmpType:      rawPacket.IcmpType,
-		IcmpCode:      rawPacket.IcmpCode,
-		TcpFlags:      rawPacket.TcpFlags,
-		FlowDirection: rawPacket.FlowDirection,
-		RemoteAddr:    rawPacket.RemoteAddr,
+		InIf:          raw.Inif,
+		OutIf:         raw.Outif,
+		Bytes:         raw.Bytes,
+		Etype:         raw.Etype,
+		Proto:         raw.Proto,
+		Ipv6FlowLabel: raw.Ipv6Flowlabel,
+		SrcPort:       raw.Srcport,
+		DstPort:       raw.Dstport,
+		IPTtl:         raw.Ipttl,
+		IPTos:         raw.Tos,
+		IcmpType:      raw.IcmpType,
+		IcmpCode:      raw.IcmpCode,
+		TcpFlags:      raw.TcpFlags,
+		FlowDirection: raw.Direction,
+		RemoteAddr:    raw.Remoteaddr,
+	}, nil
+}
+
+// Link-local addresses are useless to a collector, so a global unicast address wins.
+func pickSamplerAddress(addrs []net.Addr) net.IP {
+	var fallback net.IP
+	for _, addr := range addrs {
+		ipnet, ok := addr.(*net.IPNet)
+		if !ok || ipnet.IP.IsLoopback() {
+			continue
+		}
+		if ipnet.IP.IsGlobalUnicast() {
+			return ipnet.IP
+		}
+		if fallback == nil {
+			fallback = ipnet.IP
+		}
 	}
+	return fallback
 }
 
 type PacketDumper struct {
 	BufSize int // Determines kernel perf map allocation. It is rounded up to the nearest multiple of the current page size.
 
+	// SamplerAddress is picked from the interface by Setup unless it is set beforehand.
+	SamplerAddress net.IP
+
 	packets chan Packet // exported through .Packets()
 
 	// setup
-	objs           bpfObjects
-	socketFilterFd int
-	iface          *net.Interface
-	SamplerAddress net.IP
+	objs  bpfObjects
+	iface *net.Interface
 
 	// start
-	socketFd   int
+	socket     *os.File
 	perfReader *perf.Reader
 }
 
-func (b *PacketDumper) Packets() chan Packet {
-	if b.packets != nil {
-		return b.packets
+// returns the decoded packet stream - closed chan after Stop.
+func (dumper *PacketDumper) Packets() chan Packet {
+	if dumper.packets != nil {
+		return dumper.packets
 	}
-	b.packets = make(chan Packet)
+	dumper.packets = make(chan Packet)
 	go func() {
-		var rawPacket rawPacket
+		defer close(dumper.packets)
 		for {
-			record, err := b.perfReader.Read()
+			record, err := dumper.perfReader.Read()
 			if err != nil {
 				if errors.Is(err, perf.ErrClosed) {
 					return
@@ -110,69 +120,71 @@ func (b *PacketDumper) Packets() chan Packet {
 			}
 
 			if record.LostSamples != 0 {
-				log.Printf("[warning] BPF packet dump: Dropped %d samples from kernel perf buffer, consider increasing BufSize (currently %d bytes)", record.LostSamples, b.BufSize)
+				log.Printf("[warning] BPF packet dump: Dropped %d samples from kernel perf buffer, consider increasing BufSize (currently %d bytes)", record.LostSamples, dumper.BufSize)
 				continue
 			}
 
-			// Parse the perf event entry into an Event structure.
-			if err := binary.Read(bytes.NewBuffer(record.RawSample), binary.LittleEndian, &rawPacket); err != nil {
+			packet, err := decodePacket(record.RawSample)
+			if err != nil {
 				log.Printf("[error] BPF packet dump: Skipped 1 sample, error decoding raw perf event data: %s", err)
 				continue
 			}
-			b.packets <- parseRawPacket(rawPacket)
+			dumper.packets <- packet
 		}
 	}()
-	return b.packets
+	return dumper.packets
 }
 
-func (b *PacketDumper) Setup(device string) error {
-	// allow the current process to lock memory for eBPF resources
-	if err := rlimit.RemoveMemlock(); err != nil {
-		log.Fatalf("[error] BPF packet dump: Error during required memlock removal: %s", err)
-	}
-
-	b.objs = bpfObjects{} // load pre-compiled programs and maps into the kernel
-	if err := loadBpfObjects(&b.objs, nil); err != nil {
-		log.Fatalf("[error] BPF packet dump: Error loading objects: %v", err)
-	}
-
+func (dumper *PacketDumper) Setup(device string) error {
 	var err error
-	if b.iface, err = net.InterfaceByName(device); err != nil {
-		return fmt.Errorf("Unable to get interface, err: %v", err)
+	if dumper.iface, err = net.InterfaceByName(device); err != nil {
+		return fmt.Errorf("Unable to get interface, err: %w", err)
 	}
 
-	var addrs []net.Addr
-	addrs, err = b.iface.Addrs()
-	for _, a := range addrs {
-		if ipnet, ok := a.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-			b.SamplerAddress = ipnet.IP
-			break
+	if dumper.SamplerAddress == nil {
+		addrs, err := dumper.iface.Addrs()
+		if err != nil {
+			return fmt.Errorf("Unable to get interface addresses, err: %w", err)
 		}
+		dumper.SamplerAddress = pickSamplerAddress(addrs)
+	}
+
+	if err := rlimit.RemoveMemlock(); err != nil {
+		return fmt.Errorf("Unable to remove memlock rlimit, err: %w", err)
+	}
+
+	if err := loadBpfObjects(&dumper.objs, nil); err != nil {
+		return fmt.Errorf("Unable to load BPF objects, err: %w", err)
 	}
 
 	return nil
 }
 
-func (b *PacketDumper) Start() error {
-	var err error
-	// 768 is the network byte order representation of 0x3 (constant syscall.ETH_P_ALL)
-	if b.socketFd, err = syscall.Socket(syscall.AF_PACKET, syscall.SOCK_RAW, 768); err != nil {
-		return fmt.Errorf("Unable to open raw socket, err: %v", err)
+func (dumper *PacketDumper) Start() error {
+	if dumper.iface == nil {
+		return errors.New("Start ran without init")
 	}
 
-	sll := syscall.SockaddrLinklayer{
-		Ifindex:  b.iface.Index,
-		Protocol: 768,
-	}
-	if err := syscall.Bind(b.socketFd, &sll); err != nil {
-		return fmt.Errorf("Unable to bind interface to raw socket, err: %v", err)
+	fd, err := unix.Socket(unix.AF_PACKET, unix.SOCK_RAW, int(htons(unix.ETH_P_ALL)))
+	if err != nil {
+		return fmt.Errorf("Unable to open raw socket, err: %w", err)
 	}
 
-	if err := syscall.SetsockoptInt(b.socketFd, syscall.SOL_SOCKET, 50, b.objs.PacketDump.FD()); err != nil {
-		return fmt.Errorf("Unable to attach BPF socket filter: %v", err)
+	sll := unix.SockaddrLinklayer{
+		Ifindex:  dumper.iface.Index,
+		Protocol: htons(unix.ETH_P_ALL),
+	}
+	if err := unix.Bind(fd, &sll); err != nil {
+		unix.Close(fd)
+		return fmt.Errorf("Unable to bind interface to raw socket, err: %w", err)
 	}
 
-	if b.BufSize == 0 {
+	if err := unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_ATTACH_BPF, dumper.objs.PacketDump.FD()); err != nil {
+		unix.Close(fd)
+		return fmt.Errorf("Unable to attach BPF socket filter, err: %w", err)
+	}
+
+	if dumper.BufSize == 0 {
 		// Set to a reasonably conservative value thats safe for
 		// client-side pps levels.
 		// Cilium docs set this to os.Getpagesize, which will return
@@ -180,18 +192,27 @@ func (b *PacketDumper) Start() error {
 		// leads to dropped samples in high load situations for dev
 		// machines and containers, so the default is to increase that
 		// by a factor of 2.
-		b.BufSize = 2 * 4096
+		dumper.BufSize = 2 * 4096
 	}
-	b.perfReader, err = perf.NewReader(b.objs.Packets, b.BufSize)
+	perfReader, err := perf.NewReader(dumper.objs.Packets, dumper.BufSize)
 	if err != nil {
-		return fmt.Errorf("Unable to connect kernel perf event reader: %s", err)
+		unix.Close(fd)
+		return fmt.Errorf("Unable to connect kernel perf event reader, err: %w", err)
 	}
 
+	dumper.socket = os.NewFile(uintptr(fd), "packetdump")
+	dumper.perfReader = perfReader
 	return nil
 }
 
-func (b *PacketDumper) Stop() {
-	b.objs.Close()
-	syscall.Close(b.socketFd)
-	b.perfReader.Close()
+func (dumper *PacketDumper) Stop() error {
+	var errs []error
+	if dumper.perfReader != nil {
+		errs = append(errs, dumper.perfReader.Close())
+	}
+	if dumper.socket != nil {
+		errs = append(errs, dumper.socket.Close())
+	}
+	errs = append(errs, dumper.objs.Close())
+	return errors.Join(errs...)
 }
