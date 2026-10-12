@@ -41,6 +41,30 @@ jobs:
           GOARCH=arm64 go build ./...
           GOARCH=s390x go build ./...
 
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        env:
+          CC: clang
+        run: go test -race ./...
+
+  e2e:
+    needs: generate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build test binary
+        run: go test -c -race -o packetdump.test ./packetdump
+
+      - name: End-to-end test on lo
+        run: sudo ./packetdump.test -test.run TestEndToEndLoopback -test.v
+
   release:
     if: github.event_name == 'release'
     needs: generate
