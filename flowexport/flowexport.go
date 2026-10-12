@@ -11,6 +11,14 @@ import (
 	"github.com/bwNetFlow/flowpipeline/pb"
 )
 
+const (
+	tcpFlagFin = 0x01
+	tcpFlagRst = 0x04
+
+	minTickInterval = time.Millisecond
+	maxTickInterval = time.Second
+)
+
 type FlowKey struct {
 	SrcAddr string
 	DstAddr string
@@ -34,173 +42,219 @@ func NewFlowKey(pkt packetdump.Packet) FlowKey {
 }
 
 type FlowRecord struct {
-	TimeReceived   time.Time
-	LastUpdated    time.Time
 	SamplerAddress net.IP
-	Packets        []packetdump.Packet
+	TimeFlowStart  time.Time
+	TimeFlowEnd    time.Time
+	FirstPacket    packetdump.Packet // source of the key and the presumably static non-key fields
+	Bytes          uint64
+	Packets        uint64
+	TcpFlags       uint8
 }
 
-func BuildFlow(f *FlowRecord) *pb.EnrichedFlow {
+func (record *FlowRecord) add(pkt packetdump.Packet, now time.Time) {
+	record.TimeFlowEnd = now
+	record.Bytes += uint64(pkt.Bytes)
+	record.Packets += 1
+	record.TcpFlags |= pkt.TcpFlags
+}
+
+func BuildFlow(record *FlowRecord) *pb.EnrichedFlow {
+	pkt := record.FirstPacket
 	msg := &pb.EnrichedFlow{}
 	msg.Type = pb.EnrichedFlow_EBPF
-	msg.SamplerAddress = f.SamplerAddress
-	msg.TimeReceived = uint64(f.TimeReceived.Unix())
-	msg.TimeFlowStart = uint64(f.TimeReceived.Unix())
-	msg.TimeFlowEnd = uint64(f.LastUpdated.Unix())
-	for i, pkt := range f.Packets {
-		if i == 0 {
-			// flow key 7-tuple
-			msg.SrcAddr = pkt.SrcAddr
-			msg.DstAddr = pkt.DstAddr
-			msg.SrcPort = uint32(pkt.SrcPort)
-			msg.DstPort = uint32(pkt.DstPort)
-			msg.Proto = pkt.Proto
-			msg.IPTos = uint32(pkt.IPTos)
-			msg.InIf = pkt.InIf
+	msg.SamplerAddress = record.SamplerAddress
+	msg.TimeReceived = uint64(time.Now().Unix())
+	msg.TimeFlowStart = uint64(record.TimeFlowStart.Unix())
+	msg.TimeFlowEnd = uint64(record.TimeFlowEnd.Unix())
 
-			// other presumably static data, this will be set to the first packets fields
-			msg.OutIf = pkt.OutIf
-			msg.FlowDirection = uint32(pkt.FlowDirection)                   // this is derived from the packets type
-			msg.RemoteAddr = pb.EnrichedFlow_RemoteAddrType(pkt.RemoteAddr) // this is derived from the packets type
-			msg.Etype = pkt.Etype
-			msg.IPv6FlowLabel = pkt.Ipv6FlowLabel // TODO: no differences possible?
-			msg.IPTTL = uint32(pkt.IPTtl)         // TODO: set to lowest if differ?
-			msg.IcmpType = uint32(pkt.IcmpType)   // TODO: differences could occur between packets
-			msg.IcmpCode = uint32(pkt.IcmpCode)   // TODO: differences could occur between packets
-		}
-		// special handling
-		msg.TCPFlags = msg.TCPFlags | uint32(pkt.TcpFlags)
-		msg.Bytes += uint64(pkt.Bytes)
-		msg.Packets += 1
-	}
+	// flow key 7-tuple
+	msg.SrcAddr = pkt.SrcAddr
+	msg.DstAddr = pkt.DstAddr
+	msg.SrcPort = uint32(pkt.SrcPort)
+	msg.DstPort = uint32(pkt.DstPort)
+	msg.Proto = pkt.Proto
+	msg.IPTos = uint32(pkt.IPTos)
+	msg.InIf = pkt.InIf
+
+	msg.OutIf = pkt.OutIf
+	msg.FlowDirection = uint32(pkt.FlowDirection)
+	msg.RemoteAddr = pb.EnrichedFlow_RemoteAddrType(pkt.RemoteAddr)
+	msg.Etype = pkt.Etype
+	msg.IPv6FlowLabel = pkt.Ipv6FlowLabel // TODO: no differences possible?
+	msg.IPTTL = uint32(pkt.IPTtl)         // TODO: set to lowest if differ?
+	msg.IcmpType = uint32(pkt.IcmpType)   // TODO: differences could occur between packets
+	msg.IcmpCode = uint32(pkt.IcmpCode)   // TODO: differences could occur between packets
+
+	msg.TCPFlags = uint32(record.TcpFlags)
+	msg.Bytes = record.Bytes
+	msg.Packets = record.Packets
 	return msg
 }
 
 type FlowExporter struct {
 	activeTimeout   time.Duration
 	inactiveTimeout time.Duration
-	samplerAddress  net.IP
 
+	// Flows receives every exported flow. After Stop it receives the remaining
+	// cached flows and is then closed, so consumers should read until it is closed.
 	Flows chan *pb.EnrichedFlow
 
-	mutex *sync.RWMutex
-	stop  chan bool
-	cache map[FlowKey]*FlowRecord
+	stop     chan struct{}
+	stopOnce sync.Once
+	wake     chan struct{}
+
+	mutex          sync.Mutex
+	samplerAddress net.IP
+	cache          map[FlowKey]*FlowRecord
+	expired        []*FlowRecord
+	stopped        bool
 }
 
 func NewFlowExporter(activeTimeout string, inactiveTimeout string) (*FlowExporter, error) {
 	activeTimeoutDuration, err := time.ParseDuration(activeTimeout)
-	if err != nil {
+	if err != nil || activeTimeoutDuration <= 0 {
 		return nil, fmt.Errorf("active timeout misconfigured")
 	}
 	inactiveTimeoutDuration, err := time.ParseDuration(inactiveTimeout)
-	if err != nil {
+	if err != nil || inactiveTimeoutDuration <= 0 {
 		return nil, fmt.Errorf("inactive timeout misconfigured")
 	}
 
-	fe := &FlowExporter{activeTimeout: activeTimeoutDuration, inactiveTimeout: inactiveTimeoutDuration}
-	fe.Flows = make(chan *pb.EnrichedFlow)
-
-	fe.mutex = &sync.RWMutex{}
-	fe.cache = make(map[FlowKey]*FlowRecord)
-
-	return fe, nil
+	return &FlowExporter{
+		activeTimeout:   activeTimeoutDuration,
+		inactiveTimeout: inactiveTimeoutDuration,
+		Flows:           make(chan *pb.EnrichedFlow),
+		stop:            make(chan struct{}),
+		wake:            make(chan struct{}, 1),
+		cache:           make(map[FlowKey]*FlowRecord),
+	}, nil
 }
 
-func (f *FlowExporter) Start(samplerAddress net.IP) {
-	log.Println("[info] FlowExporter: Starting export goroutines.")
+func (exporter *FlowExporter) Start(samplerAddress net.IP) {
+	log.Println("[info] FlowExporter: Starting export goroutine.")
 
-	f.samplerAddress = samplerAddress
-	f.stop = make(chan bool)
-	go f.exportInactive()
-	go f.exportActive()
+	exporter.mutex.Lock()
+	exporter.samplerAddress = samplerAddress
+	exporter.mutex.Unlock()
+	go exporter.run()
 }
 
-func (f *FlowExporter) Stop() {
-	log.Println("[info] FlowExporter: Stopping export goroutines.")
-	close(f.stop)
+func (exporter *FlowExporter) Stop() {
+	log.Println("[info] FlowExporter: Stopping export goroutine.")
+	exporter.stopOnce.Do(func() { close(exporter.stop) })
 }
 
-func (f *FlowExporter) exportInactive() {
-	ticker := time.NewTicker(f.inactiveTimeout)
-	for {
-		select {
-		case <-ticker.C:
-			now := time.Now()
-
-			f.mutex.Lock()
-			for key, record := range f.cache {
-				if now.Sub(record.LastUpdated) > f.inactiveTimeout {
-					f.export(key)
-				}
-			}
-			f.mutex.Unlock()
-		case <-f.stop:
-			ticker.Stop()
-			return
-		}
-	}
-}
-
-func (f *FlowExporter) exportActive() {
-	ticker := time.NewTicker(f.activeTimeout)
-	for {
-		select {
-		case <-ticker.C:
-			now := time.Now()
-
-			f.mutex.Lock()
-			for key, record := range f.cache {
-				if now.Sub(record.TimeReceived) > f.activeTimeout {
-					f.export(key)
-				}
-			}
-			f.mutex.Unlock()
-		case <-f.stop:
-			ticker.Stop()
-			return
-		}
-	}
-}
-
-func (f *FlowExporter) Insert(pkt packetdump.Packet) {
+func (exporter *FlowExporter) Insert(pkt packetdump.Packet) {
 	key := NewFlowKey(pkt)
+	now := time.Now()
 
-	var record *FlowRecord
-	var exists bool
+	exporter.mutex.Lock()
+	defer exporter.mutex.Unlock()
+	if exporter.stopped {
+		return
+	}
 
-	f.mutex.Lock()
-	if record, exists = f.cache[key]; !exists {
-		f.cache[key] = new(FlowRecord)
-		f.cache[key].TimeReceived = time.Now()
-		record = f.cache[key]
+	record, exists := exporter.cache[key]
+	if !exists {
+		record = &FlowRecord{
+			SamplerAddress: exporter.samplerAddress,
+			TimeFlowStart:  now,
+			FirstPacket:    pkt,
+		}
+		exporter.cache[key] = record
 	}
-	record.LastUpdated = time.Now()
-	record.SamplerAddress = f.samplerAddress
-	record.Packets = append(record.Packets, pkt)
-	if pkt.TcpFlags&0b1 == 1 { // short cut flow export if we see TCP FIN
-		f.export(key)
+	record.add(pkt, now)
+
+	if pkt.TcpFlags&(tcpFlagFin|tcpFlagRst) != 0 {
+		delete(exporter.cache, key)
+		exporter.expired = append(exporter.expired, record)
+		select {
+		case exporter.wake <- struct{}{}:
+		default:
+		}
 	}
-	f.mutex.Unlock()
 }
 
-func (f *FlowExporter) ConsumeFrom(pkts chan packetdump.Packet) {
+func (exporter *FlowExporter) ConsumeFrom(pkts chan packetdump.Packet) {
 	for {
 		select {
 		case pkt, ok := <-pkts:
-			f.Insert(pkt)
 			if !ok {
 				return
 			}
-		case <-f.stop:
+			exporter.Insert(pkt)
+		case <-exporter.stop:
 			return
 		}
 	}
 }
 
-func (f *FlowExporter) export(key FlowKey) {
-	flowRecord := f.cache[key]
-	delete(f.cache, key)
+// run owns all sends on Flows, so Insert never blocks on a slow consumer.
+func (exporter *FlowExporter) run() {
+	defer close(exporter.Flows)
 
-	f.Flows <- BuildFlow(flowRecord)
+	ticker := time.NewTicker(max(min(exporter.activeTimeout/4, exporter.inactiveTimeout/4, maxTickInterval), minTickInterval))
+	defer ticker.Stop()
+
+	for {
+		select {
+		case now := <-ticker.C:
+			exporter.expire(now)
+		case <-exporter.wake:
+		case <-exporter.stop:
+			exporter.flush(nil)
+			return
+		}
+		if unsent := exporter.send(exporter.takeExpired()); unsent != nil {
+			exporter.flush(unsent)
+			return
+		}
+	}
+}
+
+func (exporter *FlowExporter) expire(now time.Time) {
+	exporter.mutex.Lock()
+	defer exporter.mutex.Unlock()
+	for key, record := range exporter.cache {
+		if now.Sub(record.TimeFlowEnd) > exporter.inactiveTimeout || now.Sub(record.TimeFlowStart) > exporter.activeTimeout {
+			delete(exporter.cache, key)
+			exporter.expired = append(exporter.expired, record)
+		}
+	}
+}
+
+func (exporter *FlowExporter) takeExpired() []*FlowRecord {
+	exporter.mutex.Lock()
+	defer exporter.mutex.Unlock()
+	records := exporter.expired
+	exporter.expired = nil
+	return records
+}
+
+// send returns the records it could not deliver before Stop.
+func (exporter *FlowExporter) send(records []*FlowRecord) []*FlowRecord {
+	for i, record := range records {
+		select {
+		case exporter.Flows <- BuildFlow(record):
+		case <-exporter.stop:
+			return records[i:]
+		}
+	}
+	return nil
+}
+
+func (exporter *FlowExporter) flush(unsent []*FlowRecord) {
+	exporter.mutex.Lock()
+	exporter.stopped = true
+	records := append(unsent, exporter.expired...)
+	for _, record := range exporter.cache {
+		records = append(records, record)
+	}
+	exporter.expired = nil
+	clear(exporter.cache)
+	exporter.mutex.Unlock()
+
+	for _, record := range records {
+		exporter.Flows <- BuildFlow(record)
+	}
 }
