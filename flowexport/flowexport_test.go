@@ -204,6 +204,55 @@ func TestStopUnblocksPendingSend(t *testing.T) {
 	}
 }
 
+func TestFlushOnMissingClose(t *testing.T) {
+	exporter, err := NewFlowExporter("1h", "1h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exporter.flushTimeout = 50 * time.Millisecond
+	exporter.Start(nil)
+
+	exporter.Insert(tcpPacket(9000, 100, 0x10))
+	exporter.Insert(tcpPacket(9001, 100, 0x10))
+	exporter.Stop()
+	time.Sleep(10 * exporter.flushTimeout)
+
+	if flows := drain(t, exporter); len(flows) != 0 {
+		t.Fatalf("got %d flows, want all dropped after the flush timeout", len(flows))
+	}
+}
+
+func TestFlushWithSlowReader(t *testing.T) {
+	exporter, err := NewFlowExporter("1h", "1h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exporter.flushTimeout = 100 * time.Millisecond
+	exporter.Start(nil)
+
+	for port := uint16(9100); port < 9104; port++ {
+		exporter.Insert(tcpPacket(port, 100, 0x10))
+	}
+	exporter.Stop()
+
+	var flows []*pb.EnrichedFlow
+	for {
+		time.Sleep(exporter.flushTimeout / 2)
+		select {
+		case flow, ok := <-exporter.Flows:
+			if !ok {
+				if len(flows) != 4 {
+					t.Fatalf("got %d flows, want 4 for a reader slower than the timeout in total", len(flows))
+				}
+				return
+			}
+			flows = append(flows, flow)
+		case <-time.After(receiveTimeout):
+			t.Fatal("Flows was not closed after Stop")
+		}
+	}
+}
+
 func TestConsumeFromClosedChannel(t *testing.T) {
 	exporter, err := NewFlowExporter("1h", "1h")
 	if err != nil {

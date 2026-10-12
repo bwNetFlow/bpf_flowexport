@@ -17,6 +17,8 @@ const (
 
 	minTickInterval = time.Millisecond
 	maxTickInterval = time.Second
+
+	defaultFlushTimeout = 5 * time.Second
 )
 
 type FlowKey struct {
@@ -99,6 +101,9 @@ type FlowExporter struct {
 	// cached flows and is then closed, so consumers should read until it is closed.
 	Flows chan *pb.EnrichedFlow
 
+	// If Flows goes unread for flushTimeout during that flush, the rest is dropped.
+	flushTimeout time.Duration
+
 	stop     chan struct{}
 	stopOnce sync.Once
 	wake     chan struct{}
@@ -123,6 +128,7 @@ func NewFlowExporter(activeTimeout string, inactiveTimeout string) (*FlowExporte
 	return &FlowExporter{
 		activeTimeout:   activeTimeoutDuration,
 		inactiveTimeout: inactiveTimeoutDuration,
+		flushTimeout:    defaultFlushTimeout,
 		Flows:           make(chan *pb.EnrichedFlow),
 		stop:            make(chan struct{}),
 		wake:            make(chan struct{}, 1),
@@ -254,7 +260,16 @@ func (exporter *FlowExporter) flush(unsent []*FlowRecord) {
 	clear(exporter.cache)
 	exporter.mutex.Unlock()
 
-	for _, record := range records {
-		exporter.Flows <- BuildFlow(record)
+	// Restart timer every time, so a slow consumer still gets all flows
+	idle := time.NewTimer(exporter.flushTimeout)
+	defer idle.Stop()
+	for i, record := range records {
+		select {
+		case exporter.Flows <- BuildFlow(record):
+			idle.Reset(exporter.flushTimeout)
+		case <-idle.C:
+			log.Printf("[warning] FlowExporter: Dropped %d flows on Stop, Flows was not read for %v.", len(records)-i, exporter.flushTimeout)
+			return
+		}
 	}
 }
