@@ -6,6 +6,7 @@ require (
 	github.com/bwNetFlow/flowpipeline v0.8.0-beta.0.20220513125019-53402b7ca136
 	github.com/cilium/ebpf v0.22.0
 	github.com/prometheus/client_golang v1.12.1
+	golang.org/x/sys v0.43.0
 )
 
 require (
@@ -18,7 +19,6 @@ require (
 	github.com/prometheus/client_model v0.2.0 // indirect
 	github.com/prometheus/common v0.33.0 // indirect
 	github.com/prometheus/procfs v0.7.3 // indirect
-	golang.org/x/sys v0.43.0 // indirect
 	google.golang.org/protobuf v1.28.0 // indirect
 )
 
