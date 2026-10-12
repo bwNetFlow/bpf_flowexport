@@ -16,8 +16,7 @@ import (
 	"github.com/cilium/ebpf/rlimit"
 )
 
-// $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang-13 -cflags "-O2 -g -Wall -Werror" bpf ./bpf/bpf.c
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang -cflags "-O2 -g -Wall -Werror" -type packet_t -tags linux bpf ./bpf/bpf.c
 type rawPacket struct {
 	SrcAddrHi     uint64
 	SrcAddrLo     uint64

@@ -1,0 +1,76 @@
+name: generate
+
+on:
+  push:
+  pull_request:
+  release:
+    types: [published]
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    steps:
+      - name: Install toolchain
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git clang llvm libbpf-dev linux-libc-dev
+          # clang -target bpf does not search the multiarch include dir, so linux/types.h can't find asm/types.h.
+          ln -sf "/usr/include/$(uname -m)-linux-gnu/asm" /usr/include/asm
+
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Mark workspace as safe
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Regenerate BPF objects
+        run: go generate ./...
+
+      - name: Check generated files are up to date
+        run: |
+          git diff --exit-code
+          test -z "$(git status --porcelain)"
+
+      - name: Build
+        run: |
+          GOARCH=amd64 go build ./...
+          GOARCH=arm64 go build ./...
+          GOARCH=s390x go build ./...
+
+  release:
+    if: github.event_name == 'release'
+    needs: generate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build binaries
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+        run: |
+          mkdir dist
+          for arch in amd64 arm64 s390x; do
+            GOARCH=$arch go build -trimpath -ldflags="-s -w" -o "dist/flowexport-linux-$arch" .
+            GOARCH=$arch go build -trimpath -ldflags="-s -w" -o "dist/packetdump-linux-$arch" ./packetdump/cmd
+            GOARCH=$arch go build -trimpath -ldflags="-s -w" -o "dist/promexport-linux-$arch" ./promexport/cmd
+          done
+
+      - name: Write checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" dist/* --repo "$GITHUB_REPOSITORY" --clobber
