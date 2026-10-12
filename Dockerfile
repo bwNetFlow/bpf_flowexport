@@ -1,4 +1,4 @@
-FROM golang:1.17 AS builder
+FROM golang:1.25 AS builder
 RUN apt-get update
 
 # add local repo into the builder
