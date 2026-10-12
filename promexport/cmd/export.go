@@ -22,13 +22,14 @@ func main() {
 
 	dumper := &packetdump.PacketDumper{}
 
-	err := dumper.Setup(device)
-	if err != nil {
+	if err := dumper.Setup(device); err != nil {
 		fmt.Println(err)
+		os.Exit(1)
 	}
-	err = dumper.Start()
-	if err != nil {
+	if err := dumper.Start(); err != nil {
 		fmt.Println(err)
+		dumper.Stop()
+		os.Exit(1)
 	}
 
 	export := &promexport.PacketStatExporter{}
