@@ -103,7 +103,7 @@ func TestInactiveTimeoutAggregates(t *testing.T) {
 	if !net.IP(flow.SamplerAddress).Equal(net.ParseIP("10.10.10.10")) {
 		t.Errorf("got sampler address %v", net.IP(flow.SamplerAddress))
 	}
-	if flow.TimeReceived < flow.TimeFlowStart || flow.TimeFlowEnd < flow.TimeFlowStart {
+	if flow.TimeReceived != flow.TimeFlowStart || flow.TimeFlowEnd < flow.TimeFlowStart {
 		t.Errorf("inconsistent times: received %d, start %d, end %d", flow.TimeReceived, flow.TimeFlowStart, flow.TimeFlowEnd)
 	}
 }

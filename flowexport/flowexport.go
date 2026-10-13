@@ -44,19 +44,27 @@ func NewFlowKey(pkt packetdump.Packet) FlowKey {
 }
 
 type FlowRecord struct {
+	// Deprecated: never set, use TimeFlowStart.
+	TimeReceived time.Time
+	// Deprecated: never set, use TimeFlowEnd.
+	LastUpdated time.Time
+
 	SamplerAddress net.IP
 	TimeFlowStart  time.Time
 	TimeFlowEnd    time.Time
 	FirstPacket    packetdump.Packet // source of the key and the presumably static non-key fields
 	Bytes          uint64
-	Packets        uint64
+	PacketCount    uint64
 	TcpFlags       uint8
+
+	// Deprecated: never set, packets are no longer kept. Use FirstPacket, Bytes, PacketCount and TcpFlags.
+	Packets []packetdump.Packet
 }
 
 func (record *FlowRecord) add(pkt packetdump.Packet, now time.Time) {
 	record.TimeFlowEnd = now
 	record.Bytes += uint64(pkt.Bytes)
-	record.Packets += 1
+	record.PacketCount += 1
 	record.TcpFlags |= pkt.TcpFlags
 }
 
@@ -65,7 +73,7 @@ func BuildFlow(record *FlowRecord) *pb.EnrichedFlow {
 	msg := &pb.EnrichedFlow{}
 	msg.Type = pb.EnrichedFlow_EBPF
 	msg.SamplerAddress = record.SamplerAddress
-	msg.TimeReceived = uint64(time.Now().Unix())
+	msg.TimeReceived = uint64(record.TimeFlowStart.Unix())
 	msg.TimeFlowStart = uint64(record.TimeFlowStart.Unix())
 	msg.TimeFlowEnd = uint64(record.TimeFlowEnd.Unix())
 
@@ -89,7 +97,7 @@ func BuildFlow(record *FlowRecord) *pb.EnrichedFlow {
 
 	msg.TCPFlags = uint32(record.TcpFlags)
 	msg.Bytes = record.Bytes
-	msg.Packets = record.Packets
+	msg.Packets = record.PacketCount
 	return msg
 }
 
