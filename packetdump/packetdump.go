@@ -99,6 +99,7 @@ type PacketDumper struct {
 	// start
 	socket     *os.File
 	perfReader *perf.Reader
+	done       chan struct{}
 }
 
 // returns the decoded packet stream - closed chan after Stop.
@@ -107,6 +108,7 @@ func (dumper *PacketDumper) Packets() chan Packet {
 		return dumper.packets
 	}
 	dumper.packets = make(chan Packet)
+	done := dumper.done
 	go func() {
 		defer close(dumper.packets)
 		for {
@@ -129,7 +131,11 @@ func (dumper *PacketDumper) Packets() chan Packet {
 				log.Printf("[error] BPF packet dump: Skipped 1 sample, error decoding raw perf event data: %s", err)
 				continue
 			}
-			dumper.packets <- packet
+			select {
+			case dumper.packets <- packet:
+			case <-done:
+				return
+			}
 		}
 	}()
 	return dumper.packets
@@ -203,10 +209,16 @@ func (dumper *PacketDumper) Start() error {
 
 	dumper.socket = os.NewFile(uintptr(fd), "packetdump")
 	dumper.perfReader = perfReader
+	dumper.done = make(chan struct{})
 	return nil
 }
 
 func (dumper *PacketDumper) Stop() error {
+	// Unblocks a reader goroutine stuck sending to a consumer that quit.
+	if dumper.done != nil {
+		close(dumper.done)
+		dumper.done = nil
+	}
 	var errs []error
 	if dumper.perfReader != nil {
 		errs = append(errs, dumper.perfReader.Close())
